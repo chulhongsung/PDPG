@@ -11,9 +11,7 @@ import gym
 import datetime
 
 class ReplayBuffer(object):
-    """
-    Reply Buffer
-    """
+
     def __init__(self, buffer_size):
         self.buffer_size = buffer_size
         self.buffer = deque()
