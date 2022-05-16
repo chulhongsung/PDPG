@@ -20,25 +20,23 @@ class ReplayBuffer(object):
         self.buffer = deque()
         self.count = 0
 
-    ## 버퍼에 저장
     def add_buffer(self, state, action, reward, next_state, done):
         transition = (state, action, reward, next_state, done)
 
-        # 버퍼가 꽉 찼는지 확인
+
         if self.count < self.buffer_size:
             self.buffer.append(transition)
             self.count += 1
-        else: # 찼으면 가장 오래된 데이터 삭제하고 저장
+        else: 
             self.buffer.popleft()
             self.buffer.append(transition)
 
-    ## 버퍼에서 데이터 무작위로 추출 (배치 샘플링)
     def sample_batch(self, batch_size):
         if self.count < batch_size:
             batch = random.sample(self.buffer, self.count)
         else:
             batch = random.sample(self.buffer, batch_size)
-        # 상태, 행동, 보상, 다음 상태별로 정리
+     
         states = np.asarray([i[0] for i in batch])
         actions = np.asarray([i[1] for i in batch])
         rewards = np.asarray([i[2] for i in batch])
@@ -119,8 +117,7 @@ class Actor(K.models.Model):
         x = self.h2(x)
         #x = self.h3(x)
         a = self.action(x)
-
-        # 행동을 [-action_bound, action_bound] 범위로 조정
+        
         a = K.layers.Lambda(lambda x: x*self.action_bound)(a)
 
         return a
@@ -152,7 +149,6 @@ class PDPGagent(object):
 
         self.buffer = ReplayBuffer(self.BUFFER_SIZE)
 
-        # 에피소드에서 얻은 총 보상값을 저장하기 위한 변수
         self.save_epi_reward = []
 
     def ou_noise(self, x, rho=0.15, mu=0, dt=1e-1, sigma=0.2, dim=1):
@@ -198,17 +194,6 @@ class PDPGagent(object):
         
         return z
     
-    # def td_target(self, rewards, delta, beta, gamma, dones):
-    #     y_k = np.zeros_like(delta)
-
-    #     for i in range(delta.shape[0]): # number of batch
-    #         if dones[i]:
-    #             y_k[i] = rewards[i]
-    #         else:
-    #             y_k[i] = np.squeeze(rewards[i] + self.GAMMA * self.linear_spline((tf.math.cumsum(self.Q_levels), gamma[i], beta[i], delta[i])))
-    #     return tf.clip_by_value(y_k, -1.0, 1.0)
-    
-    
     def crps(self, arg):
         """
         Compute CRPS given samples z
@@ -245,9 +230,6 @@ class PDPGagent(object):
             emp_upr = tf.math.reduce_mean(tf.expand_dims(-w, axis=-2) @ tf.transpose(tf.expand_dims(temp_quantile_dl, axis=-2), perm=[0, 2, 1]))
 
         grad_theta = tape.gradient(emp_upr, self.actor.weights)
-        #grad2 = tape.gradient(actions, self.actor.weights)
-
-        #grad_theta = [x * y for x, y in zip(grad1, grad2)]
         
         grad_phi = tape.gradient(crps, self.critic.weights)
 
@@ -259,9 +241,9 @@ class PDPGagent(object):
         for ep in range(MAX_EPISODE_NUM):
 
             pre_noise = np.zeros(self.action_dim)
-            # 에피소드 초기화
+   
             time, episode_reward, done = 0, 0, False
-            # 환경 초기화 및 초기 상태 관측
+     
             state = self.env.reset()
 
             while not done:
@@ -269,13 +251,13 @@ class PDPGagent(object):
                 action = self.actor(tf.convert_to_tensor([state], dtype=tf.float32))
                 action = action.numpy()[0]
                 noise = self.ou_noise(pre_noise, dim=self.action_dim)
-                # 행동 범위 클리핑
+
                 action = np.clip(action + noise, -self.action_bound, self.action_bound)
-                # 다음 상태, 보상 관측
+
                 next_state, reward, done, _ = self.env.step(action)
-                # 학습용 보상 설정
+
                 train_reward = (reward + 8) / 8
-                # 리플레이 버퍼에 저장
+
                 self.buffer.add_buffer(state, action, train_reward, next_state, done)
 
                 if self.buffer.buffer_count() > 1000:
@@ -291,40 +273,14 @@ class PDPGagent(object):
                 time += 1
             
             self.save_epi_reward.append(episode_reward)
-
-            if (ep+1 % 10000) == 0:
-                self.actor.save_weights("./save_weights/pendulum_actor_" + datetime.date.today().strftime("%Y%m%d") + "_epoch" + str(ep+1) + ".h5")
-                self.critic.save_weights("./save_weights/pendulum_critic_" + datetime.date.today().strftime("%Y%m%d") + "_epoch" + str(ep+1) + ".h5")
-
-            if (ep+1 % 1000) == 0:
-                
-                self.plot_plot(self.save_epi_reward)
-                plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch_temp_epi' + str(ep+1) + "_" + str(agent.BATCH_SIZE) + '_epi' + str(MAX_EPISODE_NUM)  + '.png', dpi=300)
-                
-                with open("temp_reward_" + datetime.date.today().strftime("%Y%m%d") + "_epi" + str(ep+1) + ".txt", "w") as f:
-                    for s in self.save_epi_reward:
-                        f.write(str(s) +"\n")
             print('Episode: ', ep+1, 'Time: ', time, 'Reward: ', episode_reward)
             
             
     def plot_result(self):
         plt.plot(self.save_epi_reward)
         plt.show()
-        
-try: import gym
-except:
-    import sys
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "gym"])
-    import gym
+       
 
-try: import pygame
-except:
-    import sys
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pygame"])
-    import pygame
-#%%
 env = gym.make("Pendulum-v1")
 
 agent = PDPGagent(env)
@@ -335,6 +291,3 @@ agent.train(MAX_EPISODE_NUM)
 
 agent.plot_result()
 
-plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch' + str(agent.BATCH_SIZE) + '_epi' + str(MAX_EPISODE_NUM)  + '.png', dpi=300)
-# plt.savefig('/home1/hsc0526/pdpg/pendulum_v1_reward_batch' + agent.BATCH_SIZE + '_epi' + MAX_EPISODE_NUM  + '.png', dpi=300)
-# %%
