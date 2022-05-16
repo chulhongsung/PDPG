@@ -1,4 +1,3 @@
-#%%
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras as K
@@ -11,36 +10,31 @@ import gym
 
 import datetime
 
-print("Package imported!")
-
 class ReplayBuffer(object):
-    """
-    Reply Buffer
-    """
+
     def __init__(self, buffer_size):
         self.buffer_size = buffer_size
         self.buffer = deque()
         self.count = 0
 
-    ## 버퍼에 저장
     def add_buffer(self, state, action, reward, next_state, done):
         transition = (state, action, reward, next_state, done)
 
-        # 버퍼가 꽉 찼는지 확인
+
         if self.count < self.buffer_size:
             self.buffer.append(transition)
             self.count += 1
-        else: # 찼으면 가장 오래된 데이터 삭제하고 저장
+        else: 
             self.buffer.popleft()
             self.buffer.append(transition)
 
-    ## 버퍼에서 데이터 무작위로 추출 (배치 샘플링)
+
     def sample_batch(self, batch_size):
         if self.count < batch_size:
             batch = random.sample(self.buffer, self.count)
         else:
             batch = random.sample(self.buffer, batch_size)
-        # 상태, 행동, 보상, 다음 상태별로 정리
+
         states = np.asarray([i[0] for i in batch])
         actions = np.asarray([i[1] for i in batch])
         rewards = np.asarray([i[2] for i in batch])
@@ -48,13 +42,9 @@ class ReplayBuffer(object):
         dones = np.asarray([i[4] for i in batch])
         return states, actions, rewards, next_states, dones
 
-
-    ## 버퍼 사이즈 계산
     def buffer_count(self):
         return self.count
 
-
-    ## 버퍼 비움
     def clear_buffer(self):
         self.buffer = deque()
         self.count = 0
@@ -110,17 +100,15 @@ class Actor(K.models.Model):
 
         self.h1 = K.layers.Dense(400, activation='relu')
         self.h2 = K.layers.Dense(300, activation='relu')
-        #self.h3 = K.layers.Dense(16, activation='relu')
         self.action = K.layers.Dense(action_dim, activation='tanh')
 
 
     def call(self, state):
         x = self.h1(state)
         x = self.h2(x)
-        #x = self.h3(x)
-        a = self.action(x)
 
-        # 행동을 [-action_bound, action_bound] 범위로 조정
+        a = self.action(x)
+        
         a = K.layers.Lambda(lambda x: x*self.action_bound)(a)
 
         return a
@@ -153,7 +141,6 @@ class PDPGagent(object):
 
         self.buffer = ReplayBuffer(self.BUFFER_SIZE)
 
-        # 에피소드에서 얻은 총 보상값을 저장하기 위한 변수
         self.save_epi_reward = []
 
     def ou_noise(self, x, rho=0.15, mu=0, dt=1e-1, sigma=0.2, dim=1):
@@ -180,7 +167,7 @@ class PDPGagent(object):
     def td_target(self, rewards, delta, beta, gamma, dones):
         y_k = np.zeros_like(delta)
 
-        for i in range(delta.shape[0]): # number of batch
+        for i in range(delta.shape[0]): 
             if dones[i]:
                 y_k[i] = rewards[i]
             else:
@@ -193,7 +180,7 @@ class PDPGagent(object):
         Compute CRPS given samples z
         """
 
-        mask = z >= quantile_dl # l0를 찾기위한 mask
+        mask = z >= quantile_dl
             
         bl = tf.concat([beta[0, tf.newaxis], (beta[1:] - beta[:-1])], axis=0)
 
@@ -208,7 +195,6 @@ class PDPGagent(object):
         crps_ = (2*tilde_a -1)*z + (1-2*tilde_a)*gamma + tf.math.reduce_sum(bl*((1/3)*(1 - dl**3) - dl - tf.maximum(tilde_a, dl)**2 + 2*tf.math.maximum(tilde_a, dl)*dl))
     
         return crps_
-
 
     def actor_critic_learn(self, states, rewards, next_states, dones):
        
@@ -233,9 +219,6 @@ class PDPGagent(object):
                 z += tf.math.reduce_sum(-w * temp_quantile_dl) / M
 
         grad_theta = tape.gradient(z, self.actor.weights)
-        #grad2 = tape.gradient(actions, self.actor.weights)
-
-        #grad_theta = [x * y for x, y in zip(grad1, grad2)]
         
         grad_phi = tape.gradient(temp_crps, self.critic.weights)
 
@@ -247,9 +230,9 @@ class PDPGagent(object):
         for ep in range(MAX_EPISODE_NUM):
 
             pre_noise = np.zeros(self.action_dim)
-            # 에피소드 초기화
+
             time, episode_reward, done = 0, 0, False
-            # 환경 초기화 및 초기 상태 관측
+
             state = self.env.reset()
 
             while not done:
@@ -257,13 +240,13 @@ class PDPGagent(object):
                 action = self.actor(tf.convert_to_tensor([state], dtype=tf.float32))
                 action = action.numpy()[0]
                 noise = self.ou_noise(pre_noise, dim=self.action_dim)
-                # 행동 범위 클리핑
+
                 action = np.clip(action + noise, -self.action_bound, self.action_bound)
-                # 다음 상태, 보상 관측
+
                 next_state, reward, done, _ = self.env.step(action)
-                # 학습용 보상 설정
+
                 train_reward = (reward + 8) / 8
-                # 리플레이 버퍼에 저장
+
                 self.buffer.add_buffer(state, action, train_reward, next_state, done)
 
                 if self.buffer.buffer_count() > 1000:
@@ -302,7 +285,7 @@ except:
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pygame"])
     import pygame
-#%%
+
 env = gym.make("Pendulum-v1")
 
 agent = PDPGagent(env)
@@ -314,5 +297,3 @@ agent.train(MAX_EPISODE_NUM)
 agent.plot_result()
 
 plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch' + str(agent.BATCH_SIZE) + '_epi' + str(MAX_EPISODE_NUM)  + '.png', dpi=300)
-# plt.savefig('/home1/hsc0526/pdpg/pendulum_v1_reward_batch' + agent.BATCH_SIZE + '_epi' + MAX_EPISODE_NUM  + '.png', dpi=300)
-# %%
