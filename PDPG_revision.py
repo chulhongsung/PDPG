@@ -21,8 +21,8 @@ class ReplayBuffer(object):
         self.count = 0
 
     ## 버퍼에 저장
-    def add_buffer(self, state, action, reward, next_state, done):
-        transition = (state, action, reward, next_state, done)
+    def add_buffer(self, state, action, noise, reward, next_state, done):
+        transition = (state, action, noise, reward, next_state, done)
 
         # 버퍼가 꽉 찼는지 확인
         if self.count < self.buffer_size:
@@ -41,10 +41,11 @@ class ReplayBuffer(object):
         # 상태, 행동, 보상, 다음 상태별로 정리
         states = np.asarray([i[0] for i in batch])
         actions = np.asarray([i[1] for i in batch])
-        rewards = np.asarray([i[2] for i in batch])
-        next_states = np.asarray([i[3] for i in batch])
-        dones = np.asarray([i[4] for i in batch])
-        return states, actions, rewards, next_states, dones
+        noises = np.asarray([i[2] for i in batch])
+        rewards = np.asarray([i[3] for i in batch])
+        next_states = np.asarray([i[4] for i in batch])
+        dones = np.asarray([i[5] for i in batch])
+        return states, actions, noises, rewards, next_states, dones
 
 
     ## 버퍼 사이즈 계산
@@ -124,12 +125,14 @@ class Actor(K.models.Model):
 class PDPGagent(object):
     
     def __init__(self, env):
+        self.GAMMA_INIT = 0.3
         self.GAMMA = 0.3
         self.BATCH_SIZE = 256
         self.BUFFER_SIZE = 10000
         self.ACTOR_LEARNING_RATE = 0.00001
-        self.CRITIC_LEARNING_RATE = 0.00001
-        self.DELTA = 0.2
+        self.CRITIC_LEARNING_RATE = 0.00002
+        self.DELTA = 0.3
+        self.DELTA_DECAY = 0.9999
         
         self.Q_levels = tf.constant(np.append([0.0], np.repeat(1, 10)/10), dtype=tf.float32)
 
@@ -222,14 +225,14 @@ class PDPGagent(object):
         return tf.reduce_mean(crps_)
 
     @tf.function
-    def actor_critic_learn(self, states, rewards, next_states, dones):
+    def actor_critic_learn(self, states, noises, rewards, next_states, ep):
        
         with tf.GradientTape(persistent=True) as tape:
             
-            actions = self.actor(states)
-            actions = tf.clip_by_value(actions + self.DELTA * self.gaussian_noise(), -self.action_bound , self.action_bound)
+            actions = self.actor(states) + (self.DELTA_DECAY)**ep * self.DELTA * noises
+            # actions = tf.clip_by_value(actions + self.DELTA_DECAY * self.DELTA * self.gaussian_noise(), -self.action_bound , self.action_bound)
             delta, beta, gamma, w = self.critic(tf.concat([states, actions], axis=-1))
-            next_action = tf.clip_by_value(self.actor(tf.convert_to_tensor(next_states, dtype=tf.float32)) + self.DELTA * self.gaussian_noise(), -self.action_bound , self.action_bound)
+            next_action = tf.clip_by_value(self.actor(tf.convert_to_tensor(next_states, dtype=tf.float32)) + (self.DELTA_DECAY)**ep * self.DELTA * self.gaussian_noise(), -self.action_bound , self.action_bound)
             target_delta, target_beta, target_gamma, _ = self.critic(tf.concat([tf.convert_to_tensor(next_states, dtype=tf.float32), next_action], axis=-1))
             td_targets =  tf.clip_by_value(tf.expand_dims(tf.cast(rewards, tf.float32), -1) + self.GAMMA * tf.vectorized_map(self.linear_spline, (tf.math.cumsum(tf.repeat(tf.expand_dims(self.Q_levels, -2), self.BATCH_SIZE, axis=0), axis=-1), target_gamma, target_beta, target_delta)), clip_value_min=-1.0, clip_value_max=1.0)
             # td_targets =  tf.clip_by_value(tf.expand_dims(tf.cast(rewards, tf.float32), -1) + agent.GAMMA * tf.vectorized_map(agent.linear_spline, (tf.math.cumsum(tf.repeat(tf.expand_dims(agent.Q_levels, -2), batch_size, axis=0), axis=-1), target_gamma, target_beta, target_delta)), clip_value_min=-1.0, clip_value_max=1.0)
@@ -246,6 +249,8 @@ class PDPGagent(object):
         self.optimizer_theta.apply_gradients(zip(grad_theta, self.actor.weights))
         self.optimizer_phi.apply_gradients(zip(grad_phi, self.critic.weights))
         
+        return grad_theta[0]
+        
     def train(self, MAX_EPISODE_NUM):
 
         for ep in range(MAX_EPISODE_NUM):
@@ -261,29 +266,31 @@ class PDPGagent(object):
                 action = action.numpy()[0]
                 noise = self.gaussian_noise()
                 # 행동 범위 클리핑
-                action = np.clip(action + self.DELTA * noise, -self.action_bound, self.action_bound)
+                action = np.clip(action + (self.DELTA_DECAY)**ep * self.DELTA * noise, -self.action_bound, self.action_bound)
                 # 다음 상태, 보상 관측
                 next_state, reward, done, _ = self.env.step(action)
                 # 학습용 보상 설정
                 train_reward = (reward + 8) / 8
                 # 리플레이 버퍼에 저장
-                self.buffer.add_buffer(state, action, train_reward, next_state, done)
+                self.buffer.add_buffer(state, action, noise, train_reward, next_state, done)
 
                 if self.buffer.buffer_count() > 1000:
                     
-                    states, actions, rewards, next_states, dones = self.buffer.sample_batch(self.BATCH_SIZE)
+                    states, actions, noises, rewards, next_states, dones = self.buffer.sample_batch(self.BATCH_SIZE)
                     states = tf.cast(states, dtype=tf.float32)
                     next_states = tf.cast(next_states, dtype=tf.float32)
-                    self.actor_critic_learn(states, rewards, next_states, dones)
+                    grad_theta = self.actor_critic_learn(states, noises, rewards, next_states, ep)
 
                 state = next_state
                 episode_reward += reward
                 time += 1
+                
+            self.save_epi_reward.append(round(episode_reward, 2))
             
-            self.save_epi_reward.append(episode_reward)
-            
+            self.GAMMA = self.GAMMA_INIT * (1.00001)**(ep/10)                
+
             if ((ep+1) % 20000) == 0:
-                self.GAMMA = self.GAMMA + 0.05
+                
                 self.actor.save_weights("/home1/prof/jeon/hong/pdpg/save_weights/pendulum_actor_" + datetime.date.today().strftime("%Y%m%d") + "_epoch" + str(ep+1) + ".h5")
                 self.critic.save_weights("/home1/prof/jeon/hong/pdpg/save_weights/pendulum_critic_" + datetime.date.today().strftime("%Y%m%d") + "_epoch" + str(ep+1) + ".h5")
 
@@ -293,8 +300,8 @@ class PDPGagent(object):
                 with open("/home1/prof/jeon/hong/pdpg/temp_reward_" + datetime.date.today().strftime("%Y%m%d") + "_epi" + str(ep+1) + ".txt", "w") as f:
                     for s in self.save_epi_reward:
                         f.write(str(s) +"\n")
-                print('Episode: ', ep+1, 'Time: ', time, 'Reward: ', episode_reward)
-                
+  
+                print('Episode: ', ep+1, 'Time: ', time, 'Reward: ', round(episode_reward, 2))
             
             
     def plot_result(self):
@@ -319,16 +326,19 @@ env = gym.make("Pendulum-v1")
 
 agent = PDPGagent(env)
 
-agent.action_dim + agent.state_dim
-
 MAX_EPISODE_NUM = 100000
 
 agent.train(MAX_EPISODE_NUM)
 
+# agent.actor.load_weights("./save_weights/pendulum_actor_20220517_epoch20000.h5")
+# agent.critic.load_weights("./save_weights/pendulum_critic_20220517_epoch20000.h5")
+
 agent.plot_result()
 
-plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch' + str(agent.BATCH_SIZE) + '_final.png', dpi=300)
+plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch' + str(agent.BATCH_SIZE) + '_epi' + str(MAX_EPISODE_NUM)  + '.png', dpi=300)
 
 with open("/home1/prof/jeon/hong/pdpg/temp_reward_" + datetime.date.today().strftime("%Y%m%d") + '_final_reward.txt', "w") as f:
     for s in agent.save_epi_reward:
         f.write(str(s)+"\n")
+
+# plt.savefig('/home1/hsc0526/pdpg/pendulum_v1_reward_batch' + agent.BATCH_SIZE + '_epi' + MAX_EPISODE_NUM  + '.png', dpi=300)
