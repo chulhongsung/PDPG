@@ -287,7 +287,7 @@ class PDPGagent(object):
                 
             self.save_epi_reward.append(round(episode_reward, 2))
             
-            self.GAMMA = self.GAMMA_INIT * (1.00001)**(ep/10)                
+            self.GAMMA = self.GAMMA_INIT * (1.000012)**(ep/10)                
 
             if ((ep+1) % 20000) == 0:
                 
@@ -326,7 +326,7 @@ env = gym.make("Pendulum-v1")
 
 agent = PDPGagent(env)
 
-MAX_EPISODE_NUM = 100000
+MAX_EPISODE_NUM = 1000000
 
 agent.train(MAX_EPISODE_NUM)
 
