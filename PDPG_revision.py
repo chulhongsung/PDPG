@@ -1,4 +1,3 @@
-#%%
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras as K
@@ -20,25 +19,22 @@ class ReplayBuffer(object):
         self.buffer = deque()
         self.count = 0
 
-    ## 버퍼에 저장
     def add_buffer(self, state, action, noise, reward, next_state, done):
         transition = (state, action, noise, reward, next_state, done)
 
-        # 버퍼가 꽉 찼는지 확인
         if self.count < self.buffer_size:
             self.buffer.append(transition)
             self.count += 1
-        else: # 찼으면 가장 오래된 데이터 삭제하고 저장
+        else: 
             self.buffer.popleft()
             self.buffer.append(transition)
 
-    ## 버퍼에서 데이터 무작위로 추출 (배치 샘플링)
     def sample_batch(self, batch_size):
         if self.count < batch_size:
             batch = random.sample(self.buffer, self.count)
         else:
             batch = random.sample(self.buffer, batch_size)
-        # 상태, 행동, 보상, 다음 상태별로 정리
+
         states = np.asarray([i[0] for i in batch])
         actions = np.asarray([i[1] for i in batch])
         noises = np.asarray([i[2] for i in batch])
@@ -47,13 +43,9 @@ class ReplayBuffer(object):
         dones = np.asarray([i[5] for i in batch])
         return states, actions, noises, rewards, next_states, dones
 
-
-    ## 버퍼 사이즈 계산
     def buffer_count(self):
         return self.count
 
-
-    ## 버퍼 비움
     def clear_buffer(self):
         self.buffer = deque()
         self.count = 0
@@ -117,7 +109,6 @@ class Actor(K.models.Model):
         x = self.h3(x)
         a = self.action(x)
 
-        # 행동을 [-action_bound, action_bound] 범위로 조정
         a = K.layers.Lambda(lambda x: x*self.action_bound)(a)
 
         return a
@@ -152,7 +143,6 @@ class PDPGagent(object):
 
         self.buffer = ReplayBuffer(self.BUFFER_SIZE)
 
-        # 에피소드에서 얻은 총 보상값을 저장하기 위한 변수
         self.save_epi_reward = []
 
     def gaussian_noise(self, mu=0.0, sigma=1):
@@ -187,10 +177,6 @@ class PDPGagent(object):
         gamma, beta, delta = arg
         
         bl = tf.concat([tf.expand_dims(beta[...,0], axis=-1), (beta[..., 1:] - beta[..., :-1])], axis=-1)
-
-        #dl = tf.math.cumsum(delta[..., :-1], axis=-1)
-
-        #dl = tf.concat((tf.zeros(shape=[1]), dl), axis=-1)
         
         dl = tf.math.cumsum(delta)
         
@@ -212,10 +198,6 @@ class PDPGagent(object):
             
         bl = tf.concat([beta[0, tf.newaxis], (beta[1:] - beta[:-1])], axis=0)
 
-        # dl = tf.math.cumsum(delta[..., :-1], axis=-1)
-
-        # dl = tf.concat((tf.zeros(shape=[1]), dl), axis=-1)
-
         dl = tf.math.cumsum(delta)
         
         tilde_a = tf.clip_by_value((z - gamma + tf.reduce_sum(bl * dl * mask, axis=-1))/ (tf.reduce_sum(bl * mask, axis=-1) +0.000001), clip_value_min=0.0001, clip_value_max=1)
@@ -230,15 +212,13 @@ class PDPGagent(object):
         with tf.GradientTape(persistent=True) as tape:
             
             actions = self.actor(states) + (self.DELTA_DECAY)**ep * self.DELTA * noises
-            # actions = tf.clip_by_value(actions + self.DELTA_DECAY * self.DELTA * self.gaussian_noise(), -self.action_bound , self.action_bound)
+
             delta, beta, gamma, w = self.critic(tf.concat([states, actions], axis=-1))
             next_action = tf.clip_by_value(self.actor(tf.convert_to_tensor(next_states, dtype=tf.float32)) + (self.DELTA_DECAY)**ep * self.DELTA * self.gaussian_noise(), -self.action_bound , self.action_bound)
             target_delta, target_beta, target_gamma, _ = self.critic(tf.concat([tf.convert_to_tensor(next_states, dtype=tf.float32), next_action], axis=-1))
-            td_targets =  tf.clip_by_value(tf.expand_dims(tf.cast(rewards, tf.float32), -1) + self.GAMMA * tf.vectorized_map(self.linear_spline, (tf.math.cumsum(tf.repeat(tf.expand_dims(self.Q_levels, -2), self.BATCH_SIZE, axis=0), axis=-1), target_gamma, target_beta, target_delta)), clip_value_min=-1.0, clip_value_max=1.0)
-            # td_targets =  tf.clip_by_value(tf.expand_dims(tf.cast(rewards, tf.float32), -1) + agent.GAMMA * tf.vectorized_map(agent.linear_spline, (tf.math.cumsum(tf.repeat(tf.expand_dims(agent.Q_levels, -2), batch_size, axis=0), axis=-1), target_gamma, target_beta, target_delta)), clip_value_min=-1.0, clip_value_max=1.0)
-            
+            td_targets =  tf.clip_by_value(tf.expand_dims(tf.cast(rewards, tf.float32), -1) + self.GAMMA * tf.vectorized_map(self.linear_spline, (tf.math.cumsum(tf.repeat(tf.expand_dims(self.Q_levels, -2), self.BATCH_SIZE, axis=0), axis=-1), target_gamma, target_beta, target_delta)), clip_value_min=-1.0, clip_value_max=1.0)  
             temp_quantile_dl = tf.clip_by_value(tf.vectorized_map(self.knot_value, (gamma, beta, delta)), -1.0, 1.0)
-            # temp_quantile_dl = tf.vectorized_map(agent.knot_value, (gamma, beta, delta))
+ 
             crps = tf.math.reduce_mean(tf.vectorized_map(self.crps, (td_targets, gamma, beta, delta, temp_quantile_dl)))
             emp_upr = tf.math.reduce_mean(tf.expand_dims(-w, axis=-2) @ tf.expand_dims(temp_quantile_dl, axis=-1))
 
@@ -255,9 +235,9 @@ class PDPGagent(object):
 
         for ep in range(MAX_EPISODE_NUM):
 
-            # 에피소드 초기화
+
             time, episode_reward, done = 0, 0, False
-            # 환경 초기화 및 초기 상태 관측
+
             state = self.env.reset()
             
             while not done:
@@ -265,13 +245,13 @@ class PDPGagent(object):
                 action = self.actor(tf.convert_to_tensor([state], dtype=tf.float32))
                 action = action.numpy()[0]
                 noise = self.gaussian_noise()
-                # 행동 범위 클리핑
+
                 action = np.clip(action + (self.DELTA_DECAY)**ep * self.DELTA * noise, -self.action_bound, self.action_bound)
-                # 다음 상태, 보상 관측
+
                 next_state, reward, done, _ = self.env.step(action)
-                # 학습용 보상 설정
+
                 train_reward = (reward + 8) / 8
-                # 리플레이 버퍼에 저장
+
                 self.buffer.add_buffer(state, action, noise, train_reward, next_state, done)
 
                 if self.buffer.buffer_count() > 1000:
@@ -288,20 +268,8 @@ class PDPGagent(object):
             self.save_epi_reward.append(round(episode_reward, 2))
             
             self.GAMMA = self.GAMMA_INIT * (1.000012)**(ep/10)                
-
-            if ((ep+1) % 20000) == 0:
-                
-                self.actor.save_weights("/home1/prof/jeon/hong/pdpg/save_weights/pendulum_actor_" + datetime.date.today().strftime("%Y%m%d") + "_epoch" + str(ep+1) + ".h5")
-                self.critic.save_weights("/home1/prof/jeon/hong/pdpg/save_weights/pendulum_critic_" + datetime.date.today().strftime("%Y%m%d") + "_epoch" + str(ep+1) + ".h5")
-
-                self.plot_result(self.save_epi_reward)
-                plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch_temp_epi' + str(ep+1) + "_" + str(self.BATCH_SIZE) + '_epi' + str(MAX_EPISODE_NUM)  + '.png', dpi=300)
-                
-                with open("/home1/prof/jeon/hong/pdpg/temp_reward_" + datetime.date.today().strftime("%Y%m%d") + "_epi" + str(ep+1) + ".txt", "w") as f:
-                    for s in self.save_epi_reward:
-                        f.write(str(s) +"\n")
-  
-                print('Episode: ', ep+1, 'Time: ', time, 'Reward: ', round(episode_reward, 2))
+            
+            print('Episode: ', ep+1, 'Time: ', time, 'Reward: ', round(episode_reward, 2))
             
             
     def plot_result(self):
@@ -330,15 +298,4 @@ MAX_EPISODE_NUM = 1000000
 
 agent.train(MAX_EPISODE_NUM)
 
-# agent.actor.load_weights("./save_weights/pendulum_actor_20220517_epoch20000.h5")
-# agent.critic.load_weights("./save_weights/pendulum_critic_20220517_epoch20000.h5")
-
 agent.plot_result()
-
-plt.savefig('/home1/prof/jeon/hong/pdpg/pendulum_v1_reward_batch' + str(agent.BATCH_SIZE) + '_epi' + str(MAX_EPISODE_NUM)  + '.png', dpi=300)
-
-with open("/home1/prof/jeon/hong/pdpg/temp_reward_" + datetime.date.today().strftime("%Y%m%d") + '_final_reward.txt', "w") as f:
-    for s in agent.save_epi_reward:
-        f.write(str(s)+"\n")
-
-# plt.savefig('/home1/hsc0526/pdpg/pendulum_v1_reward_batch' + agent.BATCH_SIZE + '_epi' + MAX_EPISODE_NUM  + '.png', dpi=300)
