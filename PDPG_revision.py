@@ -81,7 +81,6 @@ class Critic(K.models.Model):
         for i in range(len(self.hidden_dims)):
             temp_h = self.hidden_layers[i](temp_h)
 
-        # delta = self.delta_map(temp_h)
         beta = self.beta_map(temp_h)
 
         gamma = self.gamma_map(temp_h)
